@@ -89,9 +89,7 @@ The app uses TCP port **12345**.
 - **CachyOS:** if it uses ufw: `sudo ufw allow 12345/tcp`.
   If it uses firewalld: same commands as Fedora.
   
-  # why is it like that? because im bad at coding and dont do it full time. 
-  
-  
+  # why is it like that? because im bad at coding and dont do it full time.
   
   
   # Advanced options
@@ -109,7 +107,15 @@ To send to a device on a different port, type `IP:port` in **Send to:** (e.g. `x
   But someone on your home network with packet-sniffing tools could still *watch* a transfer's
   contents. Fine for a home LAN; don't use it over public Wi-Fi.
 - **macOS:** should work (PyQt5 runs there) but hasn't been tested. So in theory it should work but I dont own a mac.
+- If the network drops for more than about 30 seconds mid-transfer, the transfer stops and the partial file is cleaned up
+- The app rejects the transfer up front if the receiver doesn't have room for everything plus about 200 MB spare
 
+
+
+
+
+
+*Soli Deo Gloria*
 
 
 
