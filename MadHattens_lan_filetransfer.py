@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python3      I have this all here incase you want to modify anything, do what you want with it. 
 """
 MadHatten's LAN File Transfer
 Created by Austin Hatten. MIT License (see LICENSE).
@@ -18,7 +18,7 @@ APP_NAME = "MadHattens LAN File Transfer"
 APP_VERSION = "1.0"
 PROTOCOL_VERSION = 2
 
-# --- Install dependencies (PyQt5) ---
+#  Installs the dependencies (PyQt5) ---
 import subprocess
 import sys
 
@@ -35,10 +35,10 @@ def ensure_pyqt5():
         return
     except Exception:
         pass
-    # Many Linux distros block pip installs into the system Python (PEP 668).
+    # Many Linux distros block pip installs into the system Python
     print(
         "\nCould not install PyQt5 automatically.\n"
-        "Install it with your system package manager, then run this again:\n"
+        "Install it with your system package manager"
         "  Ubuntu / Mint / Edubuntu:  sudo apt install python3-pyqt5\n"
         "  Fedora:                    sudo dnf install python3-qt5\n"
         "  CachyOS / Arch:            sudo pacman -S python-pyqt5\n"
@@ -49,7 +49,7 @@ def ensure_pyqt5():
 
 ensure_pyqt5()
 
-# --- Imports ---
+# the imports that start this off
 import argparse
 import hashlib
 import hmac
@@ -75,7 +75,7 @@ from PyQt5.QtWidgets import (
     QAbstractItemView, QSizePolicy,
 )
 
-# --- Configuration ---
+#  Config
 DEFAULT_PORT = 12345
 CHUNK_SIZE = 256 * 1024            # bytes per read/send
 MAX_MSG_SIZE = 16 * 1024 * 1024    # largest control message we accept
@@ -86,9 +86,7 @@ PART_EXT = ".lanpart"              # temporary name while a file is arriving
 HISTORY_LIMIT = 500
 
 
-# =============================================================================
 #  Helpers
-# =============================================================================
 
 def human_size(n):
     n = float(n)
@@ -157,11 +155,9 @@ def parse_target(text, default_port):
     return text, default_port
 
 
-# =============================================================================
+
 #  Wire protocol
 #  Every control message = 4-byte length + JSON.  File data is sent raw
-#  right after a "file" message, followed by a "file_end" with its SHA-256.
-# =============================================================================
 
 class ProtocolError(Exception):
     pass
@@ -225,7 +221,8 @@ def safe_parts(relpath):
             continue
         if part == "..":
             raise ProtocolError("Unsafe file path")
-        # Characters Windows can't store; also strip trailing dots/spaces
+        
+        # Characters Windows cant store it also strip trailing dots and spaces
         part = _BAD_CHARS.sub("_", part).rstrip(" .") or "_"
         clean.append(part)
     if not clean:
@@ -295,9 +292,7 @@ def build_send_items(paths):
     return items, skipped
 
 
-# =============================================================================
-#  Storage: this device's identity, remembered devices, history
-# =============================================================================
+#  Storage: this device's identity, remembered devices, history etc.
 
 class Identity:
     def __init__(self, config_dir):
@@ -320,7 +315,7 @@ class DeviceStore:
         self.on_change = on_change
 
     def _notify(self):
-        # Called AFTER the lock is released, so the GUI can read the list safely.
+        # Called AFTER the lock is released, so the GUI can read the list
         if self.on_change:
             self.on_change()
 
@@ -390,9 +385,9 @@ class HistoryStore:
             self.on_change()
 
 
-# =============================================================================
-#  Requests that need a human (Allow popup / PIN entry)
-# =============================================================================
+
+#  requests need you to allow
+
 
 class PairingRequest:
     """Receiver side: someone new wants to send. Shows PIN + Allow/Cancel."""
@@ -460,9 +455,7 @@ class TransferHandle:
                 pass
 
 
-# =============================================================================
-#  Transfer engine (networking - no GUI code in here)
-# =============================================================================
+#  Transfer engine nothing her eis the gui and the transfer has to be before the start of the handles
 
 class TransferEngine:
     """
@@ -486,7 +479,7 @@ class TransferEngine:
         self.running = False
         self._server_thread = None
 
-    # ----- lifecycle -----
+    #the cycle
     def start(self):
         os.makedirs(self.download_dir, exist_ok=True)
         self.running = True
@@ -516,7 +509,6 @@ class TransferEngine:
         with self._lock:
             self.handles.pop(tid, None)
 
-    # ----- server -----
     def _serve(self):
         srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
@@ -526,7 +518,7 @@ class TransferEngine:
                 srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             srv.bind(("", self.port))
             srv.listen(8)
-            srv.settimeout(1.0)  # wake up every second to check if we're shutting down
+            srv.settimeout(1.0)  # checks before it timeout
         except OSError as e:
             self.ui.server_status(f"Can't listen on port {self.port}: {e} (is the app already open?)")
             self.ui.log(f"Server error: {e}")
@@ -547,7 +539,7 @@ class TransferEngine:
             threading.Thread(target=self._handle_incoming, args=(conn, addr), daemon=True).start()
         srv.close()
 
-    # ----- receiving -----
+    # receiving 
     def _handle_incoming(self, conn, addr):
         ip = addr[0]
         handle = self._new_handle()
@@ -571,7 +563,7 @@ class TransferEngine:
             if count < 0 or total < 0:
                 raise ProtocolError("Bad offer")
 
-            # Free-space check before anything else
+            # Free-space check
             free = shutil.disk_usage(self.download_dir).free
             if total + SPACE_MARGIN > free:
                 reason = (f"Not enough free space on {self.identity.name} "
@@ -582,7 +574,7 @@ class TransferEngine:
 
             me = {"device_id": self.identity.device_id, "name": self.identity.name}
 
-            # Remembered device? Prove it with the shared secret.
+            # Remembered device
             trusted = False
             known = self.devices.get(peer_id)
             if known:
@@ -598,7 +590,7 @@ class TransferEngine:
                 self.devices.update_seen(peer_id, peer_name, ip)
                 send_msg(conn, {"type": "accept", **me})
             else:
-                # New device: PIN + Allow/Cancel popup
+                # New device: PIN 
                 pin = f"{secrets.randbelow(10**6):06d}"
                 send_msg(conn, {"type": "pin_required", **me})
                 pairing = PairingRequest(tid, peer_name, ip, pin, count, total, conn, self.identity.name)
@@ -743,7 +735,7 @@ class TransferEngine:
             self.ui.transfer_progress(handle.tid, received, declared_total, display)
         return files_ok, files_bad, received
 
-    # ----- sending -----
+    # sending
     def send(self, target_ip, paths, port=None):
         handle = self._new_handle()
         threading.Thread(target=self._send_worker,
@@ -887,9 +879,9 @@ class TransferEngine:
                              items=count, size=sent, result=result)
 
 
-# =============================================================================
-#  GUI
-# =============================================================================
+
+# the sadness in my life. The GUI
+
 
 DARK_STYLE = """
 QWidget { font-size: 13px; }
@@ -1202,7 +1194,7 @@ class MainWindow(QMainWindow):
         self._refresh_history()
         self.engine.start()
 
-    # ----- Transfer tab -----
+    # building the transfer tab
     def _build_transfer_tab(self):
         w = QWidget()
         lay = QVBoxLayout(w)
@@ -1337,7 +1329,7 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.information(self, "Received folder", f"{self.download_dir}\n\n({e})")
 
-    # ----- pairing popups -----
+    # pairing
     def _on_pairing(self, req):
         dlg = PairingDialog(req, self)
         self.pairing_dialogs[id(req)] = dlg
@@ -1359,7 +1351,7 @@ class MainWindow(QMainWindow):
         dlg.raise_()
         dlg.activateWindow()
 
-    # ----- Devices tab -----
+    #devices tab
     def _build_devices_tab(self):
         w = QWidget()
         lay = QVBoxLayout(w)
@@ -1407,7 +1399,7 @@ class MainWindow(QMainWindow):
                                 "Forget this device? It will need a PIN again next time.") == QMessageBox.Yes:
             self.devices.forget(item.data(Qt.UserRole))
 
-    # ----- History tab -----
+    # the history
     def _build_history_tab(self):
         w = QWidget()
         lay = QVBoxLayout(w)
@@ -1449,7 +1441,7 @@ class MainWindow(QMainWindow):
         while self.log_list.count() > 300:
             self.log_list.takeItem(self.log_list.count() - 1)
 
-    # ----- shutdown -----
+    # should it shutdown
     def closeEvent(self, event):
         active = [r for r in self.rows.values() if not r.finished]
         if active and QMessageBox.question(
