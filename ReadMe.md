@@ -107,7 +107,7 @@ To send to a device on a different port, type `IP:port` in **Send to:** (e.g. `x
   But someone on your home network with packet-sniffing tools could still *watch* a transfer's
   contents. Fine for a home LAN; don't use it over public Wi-Fi.
 - **macOS:** should work (PyQt5 runs there) but hasn't been tested. So in theory it should work but I dont own a mac.
-- If the network drops for more than about 30 seconds mid-transfer, the transfer stops and the partial file is cleaned up
+- If the network drops for more than about 30 seconds mid-transfer, the transfer stops and the partial file is cleaned up. It doesn't resume, so you'll need to send it again.
 - The app rejects the transfer up front if the receiver doesn't have room for everything plus about 200 MB spare
 
 
