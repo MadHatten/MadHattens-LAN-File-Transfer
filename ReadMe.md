@@ -1,6 +1,6 @@
-This is the Read ME for MadHattens file transfer. Rename it, re program it,  doesn't bother me
+# This is the Read ME for MadHattens file transfer. Rename it, re program it,  doesn't matter to me
 
-# I care not what someone does with this, just dont be evil with it. If I find you doing evil with this you are no longer invited to my birthday party. 
+I care not what someone does with this, just dont be evil with it. If I find you doing evil with this you are no longer invited to my birthday party. 
 
 This is a Two-way file and folder transfer between computers ON THE SAME HOME NETWORK.
 Pair a device once with a PIN, tick **Remember this device**, and from then on
