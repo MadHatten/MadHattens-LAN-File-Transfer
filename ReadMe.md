@@ -1,4 +1,5 @@
-# This is the Read ME for the file transfer. Rename it, re program it,  doesn't matter to me
+# Read ME
+Rename it, re program it,  doesn't matter to me
 
 I care not what someone does with this, just dont be evil with it. If I find you doing evil with this you are no longer invited to my birthday party. 
 
@@ -10,6 +11,7 @@ Verified to work from Windows to Linux and Linux to Windows
 
 # Preface on Linux 
 sometimes you will need to right click on the .py - properties - permisions - check "Allow executing file as program" then double clicking will allow you to select "run in terminal"
+
 
 
  Why the downloads folder? IDK it is just where I wanted to dump them
