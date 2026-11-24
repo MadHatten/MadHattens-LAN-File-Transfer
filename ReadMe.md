@@ -1,4 +1,4 @@
-# Read ME
+# MadHattens LAN File Transfer
 Rename it, re program it,  doesn't matter to me
 
 I care not what someone does with this, just dont be evil with it. If I find you doing evil with this you are no longer invited to my birthday party. 
