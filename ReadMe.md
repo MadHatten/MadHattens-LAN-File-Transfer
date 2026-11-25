@@ -1,6 +1,8 @@
 # MadHattens LAN File Transfer
 Rename it, re program it,  doesn't matter to me
 
+The .exe for Windows is in the release tab
+
 I care not what someone does with this, just dont be evil with it. If I find you doing evil with this you are no longer invited to my birthday party. 
 
 This is a Two-way file and folder transfer between computers ON THE SAME HOME NETWORK.
