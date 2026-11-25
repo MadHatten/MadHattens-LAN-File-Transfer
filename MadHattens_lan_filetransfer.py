@@ -1,14 +1,15 @@
-#!/usr/bin/env python3      I have this all here incase you want to modify anything, do what you want with it. 
+#!/usr/bin/env python3
+# I have this all here incase you want to modify anything, do what you want with it. 
 """
-MadHatten's LAN File Transfer
+LAN File Transfer
 Created by Austin Hatten. MIT License (see LICENSE).
 
 Two-way file and folder transfer between computers on the same home network.
 
   * Pair a device once with a PIN, tick "Remember this device", and after that
     transfers go straight through with just a progress bar.
-  * Every file is checked with SHA-256 so you know the copy is bit-perfect.
-  * Works on Windows and Linux (Ubuntu/Mint/Edubuntu, Fedora, CachyOS).
+  * Every file is checked with SHA-256 so you know the copy is bit perfect.
+  * Works on Windows and Linux (Ubuntu/Mint/Edubuntu, Fedora, CachyOS are verified).
     macOS should work but is untested.
 
 Run:  python MadHattens_lan_filetransfer.py
@@ -18,7 +19,7 @@ APP_NAME = "MadHattens LAN File Transfer"
 APP_VERSION = "1.0"
 PROTOCOL_VERSION = 2
 
-#  Installs the dependencies (PyQt5) ---
+# this is what installs and starts the process of installing. sometimes the py3qt needs to be manually installed so thats something for me to fix in a future version. 
 import subprocess
 import sys
 
@@ -35,10 +36,10 @@ def ensure_pyqt5():
         return
     except Exception:
         pass
-    # Many Linux distros block pip installs into the system Python
+    # Many Linux distros block pip installs into the system Python (PEP 668).
     print(
         "\nCould not install PyQt5 automatically.\n"
-        "Install it with your system package manager"
+        "Install it with your system package manager\n"
         "  Ubuntu / Mint / Edubuntu:  sudo apt install python3-pyqt5\n"
         "  Fedora:                    sudo dnf install python3-qt5\n"
         "  CachyOS / Arch:            sudo pacman -S python-pyqt5\n"
@@ -49,7 +50,7 @@ def ensure_pyqt5():
 
 ensure_pyqt5()
 
-# the imports that start this off
+# the imports that start this off Imports
 import argparse
 import hashlib
 import hmac
@@ -77,18 +78,18 @@ from PyQt5.QtWidgets import (
 
 #  Config
 DEFAULT_PORT = 12345
-CHUNK_SIZE = 256 * 1024            # bytes per read/send
-MAX_MSG_SIZE = 16 * 1024 * 1024    # largest control message we accept
-NET_TIMEOUT = 30                   # seconds of silence before giving up
-HUMAN_TIMEOUT = 180                # seconds to wait for Allow / PIN entry
-SPACE_MARGIN = 200 * 1024 * 1024   # keep this much disk free after a transfer
-PART_EXT = ".lanpart"              # temporary name while a file is arriving
+PIECE_SIZE = 256 * 1024            # bytes per read/send
+BIGGEST_MESSAGE = 16 * 1024 * 1024    # largest control message we accept
+NETWORK_WAIT = 30                   # seconds of silence before giving up
+PERSON_WAIT = 180                # seconds to wait for Allow / PIN entry
+SPARE_SPACE = 200 * 1024 * 1024   # keep this much disk free after a transfer
+UNFINISHED_ENDING = ".lanpart"              # temporary name while a file is arriving
 HISTORY_LIMIT = 500
 
 
 #  Helpers
 
-def human_size(n):
+def readable_size(n):
     n = float(n)
     for unit in ["B", "KB", "MB", "GB", "TB"]:
         if n < 1024 or unit == "TB":
@@ -96,7 +97,7 @@ def human_size(n):
         n /= 1024
 
 
-def get_lan_ip():
+def my_ip():
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(("8.8.8.8", 80))  # no packets are actually sent
@@ -107,7 +108,7 @@ def get_lan_ip():
         return "127.0.0.1"
 
 
-def default_config_dir():
+def settings_folder():
     if os.name == "nt":
         base = os.environ.get("APPDATA") or os.path.expanduser("~")
     elif sys.platform == "darwin":
@@ -115,13 +116,13 @@ def default_config_dir():
     else:
         base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
     return os.path.join(base, "MadHattensLANTransfer")
+# here is the function where it joins the OS path to the downlaods folder... if you want to change it go ahead. its just simple for me and it also doesnt bother me... plus i am not 100% sure my other way would have worked.. this worked so im sticking with it.
 
-
-def default_download_dir():
+def downloads_folder():
     return os.path.join(os.path.expanduser("~"), "Downloads", "LAN_Transfers")
 
 
-def now_str():
+def right_now():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
@@ -157,80 +158,80 @@ def parse_target(text, default_port):
 
 
 #  Wire protocol
-#  Every control message = 4-byte length + JSON.  File data is sent raw
+#  Every control message = 4-byte length + JSON.  File data is sent raw its also unencrypted, I only use it on my home network to transfer some files between pc's so if you care about encryption please add it but upload it because im internested hw you would do that. 
 
-class ProtocolError(Exception):
+class BadMessage(Exception):
     pass
 
 
-class TransferCancelled(Exception):
+class Cancelled(Exception):
     pass
 
 
-class RemoteRejected(Exception):
+class TheyDeclined(Exception):
     pass
 
 
-def recv_exact(sock, n):
+def receive_exactly(connection, n):
     """Read exactly n bytes (a single recv() can legally return fewer)."""
     buf = bytearray()
     while len(buf) < n:
-        chunk = sock.recv(min(n - len(buf), CHUNK_SIZE))
+        chunk = connection.recv(min(n - len(buf), PIECE_SIZE))
         if not chunk:
             raise ConnectionError("Connection closed by the other device")
         buf.extend(chunk)
     return bytes(buf)
 
 
-def send_msg(sock, obj):
+def send_message(connection, obj):
     data = json.dumps(obj).encode("utf-8")
-    sock.sendall(len(data).to_bytes(4, "big") + data)
+    connection.sendall(len(data).to_bytes(4, "big") + data)
 
 
-def recv_msg(sock):
-    n = int.from_bytes(recv_exact(sock, 4), "big")
-    if n > MAX_MSG_SIZE:
-        raise ProtocolError("Message too large")
+def read_message(connection):
+    n = int.from_bytes(receive_exactly(connection, 4), "big")
+    if n > BIGGEST_MESSAGE:
+        raise BadMessage("Message too large")
     try:
-        obj = json.loads(recv_exact(sock, n).decode("utf-8"))
+        obj = json.loads(receive_exactly(connection, n).decode("utf-8"))
     except ValueError:
-        raise ProtocolError("Garbled message")
+        raise BadMessage("Garbled message")
     if not isinstance(obj, dict) or "type" not in obj:
-        raise ProtocolError("Bad message")
+        raise BadMessage("Bad message")
     return obj
 
 
-def expect(msg, *types):
+def must_be(msg, *types):
     if msg.get("type") not in types:
-        raise ProtocolError(f"Unexpected message '{msg.get('type')}'")
+        raise BadMessage(f"Unexpected message '{msg.get('type')}'")
 
 
-_BAD_CHARS = re.compile(r'[<>:"|?*\x00-\x1f]')
+WINDOWS_BAD_CHARACTERS = re.compile(r'[<>:"|?*\x00-\x1f]')
 
 
-def safe_parts(relpath):
+def clean_path(relpath):
     """Turn an incoming relative path into safe path parts (no '..', no absolute paths)."""
     if not isinstance(relpath, str) or not relpath:
-        raise ProtocolError("Missing file path")
+        raise BadMessage("Missing file path")
     relpath = relpath.replace("\\", "/")
     if relpath.startswith("/"):
-        raise ProtocolError("Unsafe file path")
+        raise BadMessage("Unsafe file path")
     clean = []
     for part in relpath.split("/"):
         if part in ("", "."):
             continue
         if part == "..":
-            raise ProtocolError("Unsafe file path")
+            raise BadMessage("Unsafe file path")
         
-        # Characters Windows cant store it also strip trailing dots and spaces
-        part = _BAD_CHARS.sub("_", part).rstrip(" .") or "_"
+        # Characters Windows cant store it also strip trailing dots and spaces 
+        part = WINDOWS_BAD_CHARACTERS.sub("_", part).rstrip(" .") or "_"
         clean.append(part)
     if not clean:
-        raise ProtocolError("Empty file path")
+        raise BadMessage("Empty file path")
     return clean
 
 
-def unique_name(directory, name, is_dir):
+def no_overwrite_name(directory, name, is_dir):
     """'photo.jpg' -> 'photo (1).jpg' if it already exists. Never overwrite."""
     if is_dir:
         base, ext = name, ""
@@ -238,13 +239,13 @@ def unique_name(directory, name, is_dir):
         base, ext = os.path.splitext(name)
     candidate, i = name, 1
     while (os.path.exists(os.path.join(directory, candidate))
-           or os.path.exists(os.path.join(directory, candidate + PART_EXT))):
+           or os.path.exists(os.path.join(directory, candidate + UNFINISHED_ENDING))):
         candidate = f"{base} ({i}){ext}"
         i += 1
     return candidate
 
 
-def build_send_items(paths):
+def list_files_to_send(paths):
     """Expand dropped files/folders into (abs_path, relpath, size, is_dir) items."""
     items, used_tops, skipped = [], set(), []
 
@@ -293,8 +294,9 @@ def build_send_items(paths):
 
 
 #  Storage: this device's identity, remembered devices, history etc.
+#it took me a while to figure out it needed that because im so used to knowing my own hardwares ip's. so my wife pointed out that since she doesnt know them its better to also add in hostnames and also ips with a history.
 
-class Identity:
+class ThisComputer:
     def __init__(self, config_dir):
         path = os.path.join(config_dir, "identity.json")
         data = load_json(path, {})
@@ -305,7 +307,7 @@ class Identity:
         self.name = data.get("name") or socket.gethostname()
 
 
-class DeviceStore:
+class SavedDevices:
     """Remembered (paired) devices, keyed by device ID - not IP - so IP changes don't matter."""
 
     def __init__(self, config_dir, on_change=None):
@@ -315,7 +317,7 @@ class DeviceStore:
         self.on_change = on_change
 
     def _notify(self):
-        # Called AFTER the lock is released, so the GUI can read the list
+        # Called AFTER the lock is released, so the GUI can read the list, took me so long to fix it somehow so i just left it liek this.
         if self.on_change:
             self.on_change()
 
@@ -328,7 +330,7 @@ class DeviceStore:
         with self.lock:
             self.devices[device_id] = {
                 "name": name, "ip": ip, "secret": secret,
-                "paired": now_str(), "last_seen": now_str(),
+                "paired": right_now(), "last_seen": right_now(),
             }
             save_json(self.path, self.devices)
         self._notify()
@@ -338,7 +340,7 @@ class DeviceStore:
             d = self.devices.get(device_id)
             if not d:
                 return
-            d.update({"name": name, "ip": ip, "last_seen": now_str()})
+            d.update({"name": name, "ip": ip, "last_seen": right_now()})
             save_json(self.path, self.devices)
         self._notify()
 
@@ -357,7 +359,7 @@ class DeviceStore:
             )
 
 
-class HistoryStore:
+class TransferHistory:
     def __init__(self, config_dir, on_change=None):
         self.path = os.path.join(config_dir, "history.json")
         self.lock = threading.Lock()
@@ -365,7 +367,7 @@ class HistoryStore:
         self.on_change = on_change
 
     def add(self, **entry):
-        entry.setdefault("time", now_str())
+        entry.setdefault("time", right_now())
         with self.lock:
             self.entries.insert(0, entry)
             del self.entries[HISTORY_LIMIT:]
@@ -386,16 +388,16 @@ class HistoryStore:
 
 
 
-#  requests need you to allow
+#  requests need you to allow. after you remember the deivce you dont need to. but it stop unwanted transfers from people you dont know.
 
 
-class PairingRequest:
+class IncomingPairing:
     """Receiver side: someone new wants to send. Shows PIN + Allow/Cancel."""
 
-    def __init__(self, tid, peer_name, peer_ip, pin, count, total, conn, my_name):
-        self.tid, self.peer_name, self.peer_ip = tid, peer_name, peer_ip
+    def __init__(self, transfer_id, their_name, their_ip, pin, count, total, connection, my_name):
+        self.transfer_id, self.their_name, self.their_ip = transfer_id, their_name, their_ip
         self.pin, self.count, self.total = pin, count, total
-        self.conn, self.my_name = conn, my_name
+        self.connection, self.my_name = connection, my_name
         self.event = threading.Event()
         self.allowed = False
         self.remember = False
@@ -407,20 +409,20 @@ class PairingRequest:
         self.event.set()
         if not allowed:
             try:
-                send_msg(self.conn, {"type": "reject", "reason": f"Declined on {self.my_name}"})
+                send_message(self.connection, {"type": "reject", "reason": f"Declined on {self.my_name}"})
             except Exception:
                 pass
             try:
-                self.conn.shutdown(socket.SHUT_RDWR)
+                self.connection.shutdown(socket.SHUT_RDWR)
             except Exception:
                 pass
 
 
-class PinRequest:
+class PinPrompt:
     """Sender side: ask the user for the PIN shown on the other device."""
 
-    def __init__(self, tid, peer_name, peer_ip):
-        self.tid, self.peer_name, self.peer_ip = tid, peer_name, peer_ip
+    def __init__(self, transfer_id, their_name, their_ip):
+        self.transfer_id, self.their_name, self.their_ip = transfer_id, their_name, their_ip
         self.event = threading.Event()
         self.pin = ""
         self.remember = False
@@ -437,36 +439,36 @@ class PinRequest:
             self.event.set()
 
 
-class TransferHandle:
-    def __init__(self, tid):
-        self.tid = tid
+class ActiveTransfer:
+    def __init__(self, transfer_id):
+        self.transfer_id = transfer_id
         self.cancelled = threading.Event()
-        self.sock = None
+        self.connection = None
         self.pin_request = None
 
     def cancel(self):
         self.cancelled.set()
         if self.pin_request:
             self.pin_request.cancel()
-        if self.sock:
+        if self.connection:
             try:
-                self.sock.shutdown(socket.SHUT_RDWR)
+                self.connection.shutdown(socket.SHUT_RDWR)
             except Exception:
                 pass
 
 
-#  Transfer engine nothing her eis the gui and the transfer has to be before the start of the handles
+#  Transfer engine nothing her eis the gui and the transfer has to be before the start of the handles. Im leaving thismess for you to figure out. I needed some help with AI on this part im not even going to lie. im not a great coder yet, so this is what i needed the most help on. 
 
-class TransferEngine:
+class FileMover:
     """
     `ui` must provide:
         log(text), server_status(text),
-        transfer_started(tid, direction, name, ip, total, count),
-        transfer_status(tid, text), transfer_peer(tid, name),
-        transfer_progress(tid, done, total, current),
-        transfer_finished(tid, text, ok),
-        show_pairing(PairingRequest), close_pairing(PairingRequest),
-        ask_pin(PinRequest)
+        transfer_started(transfer_id, direction, name, ip, total, count),
+        transfer_status(transfer_id, text), transfer_peer(transfer_id, name),
+        transfer_progress(transfer_id, done, total, current),
+        transfer_finished(transfer_id, text, ok),
+        show_pairing(IncomingPairing), close_pairing(IncomingPairing),
+        ask_pin(PinPrompt)
     """
 
     def __init__(self, identity, devices, history, ui, port, download_dir):
@@ -483,7 +485,7 @@ class TransferEngine:
     def start(self):
         os.makedirs(self.download_dir, exist_ok=True)
         self.running = True
-        self._server_thread = threading.Thread(target=self._serve, daemon=True)
+        self._server_thread = threading.Thread(target=self._listen, daemon=True)
         self._server_thread.start()
 
     def stop(self):
@@ -493,23 +495,23 @@ class TransferEngine:
         if self._server_thread:
             self._server_thread.join(timeout=3)
 
-    def cancel(self, tid):
-        h = self.handles.get(tid)
+    def cancel(self, transfer_id):
+        h = self.handles.get(transfer_id)
         if h:
             h.cancel()
 
     def _new_handle(self):
         with self._lock:
-            tid = next(self._ids)
-            h = TransferHandle(tid)
-            self.handles[tid] = h
+            transfer_id = next(self._ids)
+            h = ActiveTransfer(transfer_id)
+            self.handles[transfer_id] = h
             return h
 
-    def _drop_handle(self, tid):
+    def _drop_handle(self, transfer_id):
         with self._lock:
-            self.handles.pop(tid, None)
+            self.handles.pop(transfer_id, None)
 
-    def _serve(self):
+    def _listen(self):
         srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
             if os.name == "nt" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
@@ -525,114 +527,114 @@ class TransferEngine:
             srv.close()
             return
 
-        self.ui.server_status(f"Ready - {self.identity.name} at {get_lan_ip()}:{self.port}")
+        self.ui.server_status(f"Ready - {self.identity.name} at {my_ip()}:{self.port}")
         self.ui.log(f"Listening on port {self.port}")
         while self.running:
             try:
-                conn, addr = srv.accept()
+                connection, addr = srv.accept()
             except socket.timeout:
                 continue
             except OSError:
                 if not self.running:
                     break
                 continue
-            threading.Thread(target=self._handle_incoming, args=(conn, addr), daemon=True).start()
+            threading.Thread(target=self._receive_transfer, args=(connection, addr), daemon=True).start()
         srv.close()
 
     # receiving 
-    def _handle_incoming(self, conn, addr):
+    def _receive_transfer(self, connection, addr):
         ip = addr[0]
         handle = self._new_handle()
-        handle.sock = conn
-        tid = handle.tid
-        peer_name, count, total = ip, 0, 0
+        handle.connection = connection
+        transfer_id = handle.transfer_id
+        their_name, count, total = ip, 0, 0
         started = False
         pairing = None
         result, ok, received = "Failed", False, 0
         try:
-            conn.settimeout(NET_TIMEOUT)
-            hello = recv_msg(conn)
-            expect(hello, "hello")
+            connection.settimeout(NETWORK_WAIT)
+            hello = read_message(connection)
+            must_be(hello, "hello")
             if hello.get("protocol") != PROTOCOL_VERSION:
-                send_msg(conn, {"type": "reject", "reason": "Different app version - update both PCs"})
-                raise ProtocolError("Sender uses a different app version")
-            peer_id = str(hello.get("device_id", ""))[:64]
-            peer_name = str(hello.get("name") or ip)[:64]
+                send_message(connection, {"type": "reject", "reason": "Different app version - update both PCs"})
+                raise BadMessage("Sender uses a different app version")
+            their_id = str(hello.get("device_id", ""))[:64]
+            their_name = str(hello.get("name") or ip)[:64]
             offer = hello.get("offer") or {}
             count, total = int(offer.get("count", 0)), int(offer.get("total_bytes", 0))
             if count < 0 or total < 0:
-                raise ProtocolError("Bad offer")
+                raise BadMessage("Bad offer")
 
-            # Free-space check
+            # Free-space check, if i didnt add this the transfer fails silently. 
             free = shutil.disk_usage(self.download_dir).free
-            if total + SPACE_MARGIN > free:
+            if total + SPARE_SPACE > free:
                 reason = (f"Not enough free space on {self.identity.name} "
-                          f"(needs {human_size(total)}, has {human_size(free)})")
-                send_msg(conn, {"type": "reject", "reason": reason})
+                          f"(needs {readable_size(total)}, has {readable_size(free)})")
+                send_message(connection, {"type": "reject", "reason": reason})
                 result = "Rejected - not enough space"
                 return
 
-            me = {"device_id": self.identity.device_id, "name": self.identity.name}
+            my_info = {"device_id": self.identity.device_id, "name": self.identity.name}
 
-            # Remembered device
+            # Remembered device so we dont have to keep walking back and forth or for me when my server is headless.
             trusted = False
-            known = self.devices.get(peer_id)
-            if known:
-                nonce = secrets.token_hex(16)
-                send_msg(conn, {"type": "challenge", "nonce": nonce, **me})
-                auth = recv_msg(conn)
-                expect(auth, "auth")
-                expected = hmac.new(bytes.fromhex(known["secret"]), nonce.encode(), hashlib.sha256).hexdigest()
-                mac = auth.get("mac")
-                trusted = isinstance(mac, str) and hmac.compare_digest(mac, expected)
+            saved_device = self.devices.get(their_id)
+            if saved_device:
+                challenge_code = secrets.token_hex(16)
+                send_message(connection, {"type": "challenge", "nonce": challenge_code, **my_info})
+                auth = read_message(connection)
+                must_be(auth, "auth")
+                expected = hmac.new(bytes.fromhex(saved_device["secret"]), challenge_code.encode(), hashlib.sha256).hexdigest()
+                proof = auth.get("mac")
+                trusted = isinstance(proof, str) and hmac.compare_digest(proof, expected)
 
             if trusted:
-                self.devices.update_seen(peer_id, peer_name, ip)
-                send_msg(conn, {"type": "accept", **me})
+                self.devices.update_seen(their_id, their_name, ip)
+                send_message(connection, {"type": "accept", **my_info})
             else:
-                # New device: PIN 
+                # New device: PIN  for saftey vecause you dont want to send or recive something you didnt intend
                 pin = f"{secrets.randbelow(10**6):06d}"
-                send_msg(conn, {"type": "pin_required", **me})
-                pairing = PairingRequest(tid, peer_name, ip, pin, count, total, conn, self.identity.name)
+                send_message(connection, {"type": "pin_required", **my_info})
+                pairing = IncomingPairing(transfer_id, their_name, ip, pin, count, total, connection, self.identity.name)
                 self.ui.show_pairing(pairing)
-                conn.settimeout(HUMAN_TIMEOUT)
+                connection.settimeout(PERSON_WAIT)
                 try:
-                    pin_msg = recv_msg(conn)
-                    expect(pin_msg, "pin")
+                    pin_msg = read_message(connection)
+                    must_be(pin_msg, "pin")
                 except (OSError, ConnectionError):
                     if pairing.event.is_set() and not pairing.allowed:
                         result = "Declined"
                         return
                     result = "Cancelled by sender"
                     return
-                if not pairing.event.wait(HUMAN_TIMEOUT):
-                    send_msg(conn, {"type": "reject", "reason": "Nobody clicked Allow in time"})
+                if not pairing.event.wait(PERSON_WAIT):
+                    send_message(connection, {"type": "reject", "reason": "Nobody clicked Allow in time"})
                     result = "Timed out"
                     return
                 if not pairing.allowed:
                     result = "Declined"
                     return
                 if not hmac.compare_digest(str(pin_msg.get("pin", "")), pin):
-                    send_msg(conn, {"type": "reject", "reason": "Wrong PIN"})
+                    send_message(connection, {"type": "reject", "reason": "Wrong PIN"})
                     result = "Rejected - wrong PIN"
                     return
                 secret = secrets.token_hex(32)
                 if pairing.remember:
-                    self.devices.remember(peer_id, peer_name, ip, secret)
-                send_msg(conn, {"type": "accept", "secret": secret, **me})
-                conn.settimeout(NET_TIMEOUT)
+                    self.devices.remember(their_id, their_name, ip, secret)
+                send_message(connection, {"type": "accept", "secret": secret, **my_info})
+                connection.settimeout(NETWORK_WAIT)
 
             if pairing:
                 self.ui.close_pairing(pairing)
             started = True
-            self.ui.transfer_started(tid, "in", peer_name, ip, total, count)
-            files_ok, files_bad, received = self._receive_items(conn, handle, total, count)
+            self.ui.transfer_started(transfer_id, "in", their_name, ip, total, count)
+            files_ok, files_bad, received = self._receive_files(connection, handle, total, count)
             if files_bad:
                 result = f"{len(files_bad)} file(s) FAILED checksum, {files_ok} verified"
             else:
                 result = f"Completed - {files_ok} file(s) verified"
                 ok = True
-        except TransferCancelled:
+        except Cancelled:
             result = "Cancelled"
         except Exception as e:
             if handle.cancelled.is_set():
@@ -647,18 +649,18 @@ class TransferEngine:
             if pairing:
                 self.ui.close_pairing(pairing)
             try:
-                conn.close()
+                connection.close()
             except Exception:
                 pass
-            self._drop_handle(tid)
+            self._drop_handle(transfer_id)
             if started:
-                self.ui.transfer_finished(tid, result, ok)
+                self.ui.transfer_finished(transfer_id, result, ok)
             else:
-                self.ui.log(f"Incoming from {peer_name} ({ip}): {result}")
-            self.history.add(direction="Received", device=peer_name, ip=ip,
+                self.ui.log(f"Incoming from {their_name} ({ip}): {result}")
+            self.history.add(direction="Received", device=their_name, ip=ip,
                              items=count, size=received if started else total, result=result)
 
-    def _receive_items(self, conn, handle, declared_total, declared_count):
+    def _receive_files(self, connection, handle, declared_total, declared_count):
         dest = os.path.abspath(self.download_dir)
         os.makedirs(dest, exist_ok=True)
         top_map = {}
@@ -666,197 +668,197 @@ class TransferEngine:
         last_emit = 0.0
         while True:
             if handle.cancelled.is_set():
-                raise TransferCancelled()
-            msg = recv_msg(conn)
+                raise Cancelled()
+            msg = read_message(connection)
             if msg["type"] == "done":
                 break
-            expect(msg, "file")
+            must_be(msg, "file")
             items += 1
             if items > declared_count:
-                raise ProtocolError("More items than announced")
-            parts = safe_parts(msg.get("path"))
+                raise BadMessage("More items than announced")
+            parts = clean_path(msg.get("path"))
             is_dir = bool(msg.get("is_dir"))
             size = int(msg.get("size", 0))
             if size < 0:
-                raise ProtocolError("Bad file size")
+                raise BadMessage("Bad file size")
 
             top = parts[0]
             if top not in top_map:
-                top_map[top] = unique_name(dest, top, is_dir or len(parts) > 1)
+                top_map[top] = no_overwrite_name(dest, top, is_dir or len(parts) > 1)
             parts[0] = top_map[top]
             target = os.path.abspath(os.path.join(dest, *parts))
             if not target.startswith(dest + os.sep):
-                raise ProtocolError("Unsafe file path")
+                raise BadMessage("Unsafe file path")
             display = "/".join(parts)
 
             if is_dir:
                 os.makedirs(target, exist_ok=True)
                 continue
             if received + size > declared_total:
-                raise ProtocolError("More data than announced")
+                raise BadMessage("More data than announced")
 
             os.makedirs(os.path.dirname(target), exist_ok=True)
-            tmp = target + PART_EXT
-            h = hashlib.sha256()
+            tmp = target + UNFINISHED_ENDING
+            checksum = hashlib.sha256()
             remaining = size
             try:
                 with open(tmp, "wb") as f:
                     while remaining > 0:
                         if handle.cancelled.is_set():
-                            raise TransferCancelled()
-                        chunk = conn.recv(min(CHUNK_SIZE, remaining))
+                            raise Cancelled()
+                        chunk = connection.recv(min(PIECE_SIZE, remaining))
                         if not chunk:
                             raise ConnectionError("Connection lost")
                         f.write(chunk)
-                        h.update(chunk)
+                        checksum.update(chunk)
                         remaining -= len(chunk)
                         received += len(chunk)
                         t = time.monotonic()
                         if t - last_emit > 0.1:
-                            self.ui.transfer_progress(handle.tid, received, declared_total, display)
+                            self.ui.transfer_progress(handle.transfer_id, received, declared_total, display)
                             last_emit = t
-                end = recv_msg(conn)
-                expect(end, "file_end")
-                if hmac.compare_digest(str(end.get("sha256", "")), h.hexdigest()):
+                end = read_message(connection)
+                must_be(end, "file_end")
+                if hmac.compare_digest(str(end.get("sha256", "")), checksum.hexdigest()):
                     os.replace(tmp, target)
                     files_ok += 1
-                    send_msg(conn, {"type": "file_ok"})
+                    send_message(connection, {"type": "file_ok"})
                 else:
                     os.remove(tmp)
                     files_bad.append(display)
                     self.ui.log(f"Checksum FAILED for {display} - file deleted")
-                    send_msg(conn, {"type": "file_bad", "reason": "Checksum mismatch"})
+                    send_message(connection, {"type": "file_bad", "reason": "Checksum mismatch"})
             except BaseException:
                 try:
                     os.remove(tmp)
                 except OSError:
                     pass
                 raise
-            self.ui.transfer_progress(handle.tid, received, declared_total, display)
+            self.ui.transfer_progress(handle.transfer_id, received, declared_total, display)
         return files_ok, files_bad, received
 
-    # sending
+    # sending is wher ei had some sort of grasp on from reading some stuff about my job in there KB articles
     def send(self, target_ip, paths, port=None):
         handle = self._new_handle()
-        threading.Thread(target=self._send_worker,
+        threading.Thread(target=self._send_files,
                          args=(handle, target_ip, port or self.port, list(paths)),
                          daemon=True).start()
-        return handle.tid
+        return handle.transfer_id
 
-    def _send_worker(self, handle, target_ip, port, paths):
-        tid = handle.tid
-        peer_name = target_ip
+    def _send_files(self, handle, target_ip, port, paths):
+        transfer_id = handle.transfer_id
+        their_name = target_ip
         result, ok, sent, count = "Failed", False, 0, 0
         try:
-            items, skipped = build_send_items(paths)
+            items, skipped = list_files_to_send(paths)
             for s in skipped:
                 self.ui.log(f"Skipped (can't read): {s}")
             count = len(items)
             total = sum(i[2] for i in items)
-            self.ui.transfer_started(tid, "out", target_ip, target_ip, total, count)
+            self.ui.transfer_started(transfer_id, "out", target_ip, target_ip, total, count)
             if not items:
-                raise ProtocolError("Nothing to send")
-            self.ui.transfer_status(tid, "Connecting...")
+                raise BadMessage("Nothing to send")
+            self.ui.transfer_status(transfer_id, "Connecting...")
             try:
-                sock = socket.create_connection((target_ip, port), timeout=10)
+                connection = socket.create_connection((target_ip, port), timeout=10)
             except (socket.timeout, ConnectionRefusedError, OSError):
                 raise ConnectionError(f"Couldn't connect - is the app open on {target_ip}?")
-            handle.sock = sock
+            handle.connection = connection
             if handle.cancelled.is_set():
-                raise TransferCancelled()
-            sock.settimeout(HUMAN_TIMEOUT + 30)
+                raise Cancelled()
+            connection.settimeout(PERSON_WAIT + 30)
 
-            send_msg(sock, {
+            send_message(connection, {
                 "type": "hello", "protocol": PROTOCOL_VERSION,
                 "device_id": self.identity.device_id, "name": self.identity.name,
                 "offer": {"count": count, "total_bytes": total},
             })
 
-            remember, peer_id = False, None
+            remember, their_id = False, None
             while True:
-                msg = recv_msg(sock)
+                msg = read_message(connection)
                 t = msg["type"]
                 if t == "challenge":
-                    peer_id = msg.get("device_id")
-                    peer_name = msg.get("name") or target_ip
-                    known = self.devices.get(peer_id)
-                    mac = None
-                    if known:
-                        mac = hmac.new(bytes.fromhex(known["secret"]), str(msg.get("nonce", "")).encode(),
+                    their_id = msg.get("device_id")
+                    their_name = msg.get("name") or target_ip
+                    saved_device = self.devices.get(their_id)
+                    proof = None
+                    if saved_device:
+                        proof = hmac.new(bytes.fromhex(saved_device["secret"]), str(msg.get("nonce", "")).encode(),
                                        hashlib.sha256).hexdigest()
-                    send_msg(sock, {"type": "auth", "mac": mac})
+                    send_message(connection, {"type": "auth", "mac": proof})
                 elif t == "pin_required":
-                    peer_id = msg.get("device_id")
-                    peer_name = msg.get("name") or target_ip
-                    self.ui.transfer_peer(tid, peer_name)
-                    self.ui.transfer_status(tid, f"Enter the PIN shown on {peer_name}")
-                    req = PinRequest(tid, peer_name, target_ip)
+                    their_id = msg.get("device_id")
+                    their_name = msg.get("name") or target_ip
+                    self.ui.transfer_peer(transfer_id, their_name)
+                    self.ui.transfer_status(transfer_id, f"Enter the PIN shown on {their_name}")
+                    req = PinPrompt(transfer_id, their_name, target_ip)
                     handle.pin_request = req
                     self.ui.ask_pin(req)
-                    if not req.event.wait(HUMAN_TIMEOUT) or req.cancelled:
-                        raise TransferCancelled()
+                    if not req.event.wait(PERSON_WAIT) or req.cancelled:
+                        raise Cancelled()
                     remember = req.remember
-                    send_msg(sock, {"type": "pin", "pin": req.pin})
-                    self.ui.transfer_status(tid, f"Waiting for Allow on {peer_name}...")
+                    send_message(connection, {"type": "pin", "pin": req.pin})
+                    self.ui.transfer_status(transfer_id, f"Waiting for Allow on {their_name}...")
                 elif t == "accept":
-                    peer_id = msg.get("device_id") or peer_id
-                    peer_name = msg.get("name") or peer_name
+                    their_id = msg.get("device_id") or their_id
+                    their_name = msg.get("name") or their_name
                     if msg.get("secret") and remember:
-                        self.devices.remember(peer_id, peer_name, target_ip, msg["secret"])
-                    elif peer_id and self.devices.get(peer_id):
-                        self.devices.update_seen(peer_id, peer_name, target_ip)
+                        self.devices.remember(their_id, their_name, target_ip, msg["secret"])
+                    elif their_id and self.devices.get(their_id):
+                        self.devices.update_seen(their_id, their_name, target_ip)
                     break
                 elif t == "reject":
-                    raise RemoteRejected(msg.get("reason", "Rejected"))
+                    raise TheyDeclined(msg.get("reason", "Rejected"))
                 else:
-                    raise ProtocolError(f"Unexpected message '{t}'")
+                    raise BadMessage(f"Unexpected message '{t}'")
 
-            self.ui.transfer_peer(tid, peer_name)
-            self.ui.transfer_status(tid, "Sending...")
-            sock.settimeout(NET_TIMEOUT)
+            self.ui.transfer_peer(transfer_id, their_name)
+            self.ui.transfer_status(transfer_id, "Sending...")
+            connection.settimeout(NETWORK_WAIT)
             files_ok, files_bad = 0, []
             last_emit = 0.0
             for abs_path, rel, size, is_dir in items:
                 if handle.cancelled.is_set():
-                    raise TransferCancelled()
-                send_msg(sock, {"type": "file", "path": rel, "size": size, "is_dir": is_dir})
+                    raise Cancelled()
+                send_message(connection, {"type": "file", "path": rel, "size": size, "is_dir": is_dir})
                 if is_dir:
                     continue
-                h = hashlib.sha256()
+                checksum = hashlib.sha256()
                 remaining = size
                 with open(abs_path, "rb") as f:
                     while remaining > 0:
                         if handle.cancelled.is_set():
-                            raise TransferCancelled()
-                        chunk = f.read(min(CHUNK_SIZE, remaining))
+                            raise Cancelled()
+                        chunk = f.read(min(PIECE_SIZE, remaining))
                         if not chunk:
                             raise IOError(f"File changed while sending: {rel}")
-                        sock.sendall(chunk)
-                        h.update(chunk)
+                        connection.sendall(chunk)
+                        checksum.update(chunk)
                         remaining -= len(chunk)
                         sent += len(chunk)
                         t = time.monotonic()
                         if t - last_emit > 0.1:
-                            self.ui.transfer_progress(tid, sent, total, rel)
+                            self.ui.transfer_progress(transfer_id, sent, total, rel)
                             last_emit = t
-                send_msg(sock, {"type": "file_end", "sha256": h.hexdigest()})
-                reply = recv_msg(sock)
+                send_message(connection, {"type": "file_end", "sha256": checksum.hexdigest()})
+                reply = read_message(connection)
                 if reply["type"] == "file_ok":
                     files_ok += 1
                 elif reply["type"] == "file_bad":
                     files_bad.append(rel)
                 else:
-                    raise ProtocolError(f"Unexpected message '{reply['type']}'")
-                self.ui.transfer_progress(tid, sent, total, rel)
-            send_msg(sock, {"type": "done"})
+                    raise BadMessage(f"Unexpected message '{reply['type']}'")
+                self.ui.transfer_progress(transfer_id, sent, total, rel)
+            send_message(connection, {"type": "done"})
             if files_bad:
                 result = f"{len(files_bad)} file(s) FAILED checksum, {files_ok} verified"
             else:
                 result = f"Completed - {files_ok} file(s) verified"
                 ok = True
-        except TransferCancelled:
+        except Cancelled:
             result = "Cancelled"
-        except RemoteRejected as e:
+        except TheyDeclined as e:
             result = f"Rejected - {e}"
         except Exception as e:
             if handle.cancelled.is_set():
@@ -868,19 +870,19 @@ class TransferEngine:
             else:
                 result = f"Failed - {e}"
         finally:
-            if handle.sock:
+            if handle.connection:
                 try:
-                    handle.sock.close()
+                    handle.connection.close()
                 except Exception:
                     pass
-            self._drop_handle(tid)
-            self.ui.transfer_finished(tid, result, ok)
-            self.history.add(direction="Sent", device=peer_name, ip=target_ip,
+            self._drop_handle(transfer_id)
+            self.ui.transfer_finished(transfer_id, result, ok)
+            self.history.add(direction="Sent", device=their_name, ip=target_ip,
                              items=count, size=sent, result=result)
 
 
 
-# the sadness in my life. The GUI
+# the sadness in my life. The GUI, something that broke more times that i can count. its basic but you can and should modyfy it as much as you want. i want to see what yall come up with though.
 
 
 DARK_STYLE = """
@@ -931,7 +933,7 @@ def apply_dark_theme(app):
     app.setStyleSheet(DARK_STYLE)
 
 
-class UIBridge(QObject):
+class WindowMessenger(QObject):
     """Engine threads call these methods; signals carry the work safely to the GUI thread."""
     log_sig = pyqtSignal(str)
     server_sig = pyqtSignal(str)
@@ -948,17 +950,17 @@ class UIBridge(QObject):
 
     def log(self, text): self.log_sig.emit(text)
     def server_status(self, text): self.server_sig.emit(text)
-    def transfer_started(self, tid, d, name, ip, total, count): self.started_sig.emit(tid, d, name, ip, total, count)
-    def transfer_status(self, tid, text): self.status_sig.emit(tid, text)
-    def transfer_peer(self, tid, name): self.peer_sig.emit(tid, name)
-    def transfer_progress(self, tid, done, total, cur): self.progress_sig.emit(tid, done, total, cur)
-    def transfer_finished(self, tid, text, ok): self.finished_sig.emit(tid, text, ok)
+    def transfer_started(self, transfer_id, d, name, ip, total, count): self.started_sig.emit(transfer_id, d, name, ip, total, count)
+    def transfer_status(self, transfer_id, text): self.status_sig.emit(transfer_id, text)
+    def transfer_peer(self, transfer_id, name): self.peer_sig.emit(transfer_id, name)
+    def transfer_progress(self, transfer_id, done, total, cur): self.progress_sig.emit(transfer_id, done, total, cur)
+    def transfer_finished(self, transfer_id, text, ok): self.finished_sig.emit(transfer_id, text, ok)
     def show_pairing(self, req): self.pairing_sig.emit(req)
     def close_pairing(self, req): self.pairing_close_sig.emit(req)
     def ask_pin(self, req): self.pin_sig.emit(req)
 
 
-class DropZone(QLabel):
+class DropBox(QLabel):
     dropped = pyqtSignal(list)
 
     def __init__(self):
@@ -988,13 +990,13 @@ class DropZone(QLabel):
             self.dropped.emit(paths)
 
 
-class TransferRow(QFrame):
+class TransferBar(QFrame):
     cancel_clicked = pyqtSignal(int)
 
-    def __init__(self, tid, direction, name, ip, total, count):
+    def __init__(self, transfer_id, direction, name, ip, total, count):
         super().__init__()
         self.setObjectName("row")
-        self.tid, self.direction, self.ip = tid, direction, ip
+        self.transfer_id, self.direction, self.ip = transfer_id, direction, ip
         self.total = total
         self.finished = False
         self._start = time.monotonic()
@@ -1007,7 +1009,7 @@ class TransferRow(QFrame):
         top.addWidget(self.title, 1)
         self.cancel_btn = QPushButton("Cancel")
         self.cancel_btn.setObjectName("danger")
-        self.cancel_btn.clicked.connect(lambda: self.cancel_clicked.emit(self.tid))
+        self.cancel_btn.clicked.connect(lambda: self.cancel_clicked.emit(self.transfer_id))
         top.addWidget(self.cancel_btn)
         lay.addLayout(top)
 
@@ -1015,7 +1017,7 @@ class TransferRow(QFrame):
         self.bar.setRange(0, 1000)
         self.bar.setTextVisible(False)
         lay.addWidget(self.bar)
-        self.detail = QLabel(f"{count} item(s), {human_size(total)}")
+        self.detail = QLabel(f"{count} item(s), {readable_size(total)}")
         self.detail.setObjectName("muted")
         lay.addWidget(self.detail)
         self.set_peer(name)
@@ -1035,9 +1037,9 @@ class TransferRow(QFrame):
         total = total or 1
         self.bar.setValue(int(done * 1000 / total))
         elapsed = max(time.monotonic() - self._start, 0.001)
-        speed = human_size(done / elapsed) + "/s"
+        speed = readable_size(done / elapsed) + "/s"
         name = current if len(current) < 60 else "..." + current[-57:]
-        self.detail.setText(f"{done * 100 // total}%  -  {human_size(done)} of {human_size(total)}  -  {speed}  -  {name}")
+        self.detail.setText(f"{done * 100 // total}%  -  {readable_size(done)} of {readable_size(total)}  -  {speed}  -  {name}")
 
     def finish(self, text, ok):
         self.finished = True
@@ -1051,7 +1053,7 @@ class TransferRow(QFrame):
             self.detail.setStyleSheet("color: #ff7b7b;")
 
 
-class PairingDialog(QDialog):
+class AllowPopup(QDialog):
     """Receiver: first time a device sends - PIN + Allow/Cancel."""
 
     def __init__(self, req, parent):
@@ -1062,8 +1064,8 @@ class PairingDialog(QDialog):
         self.setModal(False)
         lay = QVBoxLayout(self)
         lay.setSpacing(10)
-        head = QLabel(f"<b>{req.peer_name}</b> ({req.peer_ip}) wants to send you<br>"
-                      f"{req.count} item(s), {human_size(req.total)}")
+        head = QLabel(f"<b>{req.their_name}</b> ({req.their_ip}) wants to send you<br>"
+                      f"{req.count} item(s), {readable_size(req.total)}")
         head.setObjectName("heading")
         lay.addWidget(head)
         lay.addWidget(QLabel("Enter this PIN on the sending computer:"))
@@ -1101,7 +1103,7 @@ class PairingDialog(QDialog):
         super().closeEvent(e)
 
 
-class PinDialog(QDialog):
+class PinPopup(QDialog):
     """Sender: type the PIN shown on the other computer."""
 
     def __init__(self, req, parent):
@@ -1111,7 +1113,7 @@ class PinDialog(QDialog):
         self.setWindowFlag(Qt.WindowStaysOnTopHint, True)
         lay = QVBoxLayout(self)
         lay.setSpacing(10)
-        head = QLabel(f"<b>{req.peer_name}</b> ({req.peer_ip}) hasn't been paired yet.")
+        head = QLabel(f"<b>{req.their_name}</b> ({req.their_ip}) hasn't been paired yet.")
         head.setObjectName("heading")
         lay.addWidget(head)
         lay.addWidget(QLabel("Type the 6-digit PIN shown on that computer:"))
@@ -1156,17 +1158,17 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle(f"{APP_NAME}  v{APP_VERSION}")
         self.resize(820, 680)
-        self.bridge = UIBridge()
+        self.bridge = WindowMessenger()
         self.rows = {}
         self.pairing_dialogs = {}
         self.queue = []
 
-        config_dir = args.config_dir or default_config_dir()
-        self.download_dir = args.download_dir or default_download_dir()
-        self.identity = Identity(config_dir)
-        self.devices = DeviceStore(config_dir, on_change=self.bridge.devices_sig.emit)
-        self.history = HistoryStore(config_dir, on_change=self.bridge.history_sig.emit)
-        self.engine = TransferEngine(self.identity, self.devices, self.history,
+        config_dir = args.config_dir or settings_folder()
+        self.download_dir = args.download_dir or downloads_folder()
+        self.identity = ThisComputer(config_dir)
+        self.devices = SavedDevices(config_dir, on_change=self.bridge.devices_sig.emit)
+        self.history = TransferHistory(config_dir, on_change=self.bridge.history_sig.emit)
+        self.engine = FileMover(self.identity, self.devices, self.history,
                                      self.bridge, args.port, self.download_dir)
 
         tabs = QTabWidget()
@@ -1180,9 +1182,9 @@ class MainWindow(QMainWindow):
         b.log_sig.connect(self._log)
         b.server_sig.connect(self.statusBar().showMessage)
         b.started_sig.connect(self._on_started)
-        b.status_sig.connect(lambda tid, t: self.rows[tid].set_status(t) if tid in self.rows else None)
-        b.peer_sig.connect(lambda tid, n: self.rows[tid].set_peer(n) if tid in self.rows else None)
-        b.progress_sig.connect(lambda tid, d, t, c: self.rows[tid].set_progress(d, t, c) if tid in self.rows else None)
+        b.status_sig.connect(lambda transfer_id, t: self.rows[transfer_id].set_status(t) if transfer_id in self.rows else None)
+        b.peer_sig.connect(lambda transfer_id, n: self.rows[transfer_id].set_peer(n) if transfer_id in self.rows else None)
+        b.progress_sig.connect(lambda transfer_id, d, t, c: self.rows[transfer_id].set_progress(d, t, c) if transfer_id in self.rows else None)
         b.finished_sig.connect(self._on_finished)
         b.pairing_sig.connect(self._on_pairing)
         b.pairing_close_sig.connect(self._on_pairing_close)
@@ -1194,13 +1196,13 @@ class MainWindow(QMainWindow):
         self._refresh_history()
         self.engine.start()
 
-    # building the transfer tab
+    # building the transfer tab.. its basic but works
     def _build_transfer_tab(self):
         w = QWidget()
         lay = QVBoxLayout(w)
         lay.setSpacing(10)
 
-        self.dropzone = DropZone()
+        self.dropzone = DropBox()
         self.dropzone.dropped.connect(self._add_paths)
         lay.addWidget(self.dropzone)
 
@@ -1268,7 +1270,7 @@ class MainWindow(QMainWindow):
                 folder_name = os.path.basename(p.rstrip("/\\")) or p
                 label = f"\U0001F4C1  {folder_name}   (folder)"
             else:
-                label = f"\U0001F4C4  {os.path.basename(p)}   ({human_size(os.path.getsize(p))})"
+                label = f"\U0001F4C4  {os.path.basename(p)}   ({readable_size(os.path.getsize(p))})"
             item = QListWidgetItem(label)
             item.setToolTip(p)
             self.queue_list.addItem(item)
@@ -1297,25 +1299,25 @@ class MainWindow(QMainWindow):
         self.engine.send(ip, self.queue, port)
         self._clear_queue()
 
-    def _on_started(self, tid, direction, name, ip, total, count):
-        row = TransferRow(tid, direction, name, ip, total, count)
+    def _on_started(self, transfer_id, direction, name, ip, total, count):
+        row = TransferBar(transfer_id, direction, name, ip, total, count)
         row.cancel_clicked.connect(self.engine.cancel)
-        self.rows[tid] = row
+        self.rows[transfer_id] = row
         self.rows_box.insertWidget(0, row)
         if direction == "in" and not self.isActiveWindow():
             QApplication.alert(self)
 
-    def _on_finished(self, tid, text, ok):
-        if tid in self.rows:
-            self.rows[tid].finish(text, ok)
-        self._log(f"Transfer #{tid}: {text}")
+    def _on_finished(self, transfer_id, text, ok):
+        if transfer_id in self.rows:
+            self.rows[transfer_id].finish(text, ok)
+        self._log(f"Transfer #{transfer_id}: {text}")
 
     def _clear_finished(self):
-        for tid, row in list(self.rows.items()):
+        for transfer_id, row in list(self.rows.items()):
             if row.finished:
                 row.setParent(None)
                 row.deleteLater()
-                del self.rows[tid]
+                del self.rows[transfer_id]
 
     def _open_download_dir(self):
         os.makedirs(self.download_dir, exist_ok=True)
@@ -1329,9 +1331,9 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.information(self, "Received folder", f"{self.download_dir}\n\n({e})")
 
-    # pairing
+    # pairing on device to device that requires the pin
     def _on_pairing(self, req):
-        dlg = PairingDialog(req, self)
+        dlg = AllowPopup(req, self)
         self.pairing_dialogs[id(req)] = dlg
         dlg.show()
         dlg.raise_()
@@ -1346,7 +1348,7 @@ class MainWindow(QMainWindow):
             dlg.deleteLater()
 
     def _on_pin(self, req):
-        dlg = PinDialog(req, self)
+        dlg = PinPopup(req, self)
         dlg.show()
         dlg.raise_()
         dlg.activateWindow()
@@ -1360,7 +1362,7 @@ class MainWindow(QMainWindow):
         lay.addWidget(h)
         self.me_label = QLabel(
             f"Name: {self.identity.name}\n"
-            f"Address: {get_lan_ip()}:{self.engine.port}\n"
+            f"Address: {my_ip()}:{self.engine.port}\n"
             f"Saves to: {self.download_dir}"
         )
         self.me_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
@@ -1432,7 +1434,7 @@ class MainWindow(QMainWindow):
         self.history_table.setRowCount(len(entries))
         for r, e in enumerate(entries):
             vals = [e.get("time", ""), e.get("direction", ""), e.get("device", ""), e.get("ip", ""),
-                    str(e.get("items", "")), human_size(e.get("size", 0) or 0), e.get("result", "")]
+                    str(e.get("items", "")), readable_size(e.get("size", 0) or 0), e.get("result", "")]
             for c, v in enumerate(vals):
                 self.history_table.setItem(r, c, QTableWidgetItem(v))
 
